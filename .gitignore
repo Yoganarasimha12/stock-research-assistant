@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Environment variables — NEVER commit these
+.env
+.env.local
+.env.production
+
+# Vector DB local data
+chroma_db/
+*.db
+
+# Node / React
+node_modules/
+frontend/build/
+frontend/.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
