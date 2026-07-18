@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from database import get_db
 from models import Company
 import yfinance as yf
+from services.sec_fetcher import get_cik, get_recent_filings
 
 router = APIRouter(prefix="/companies", tags=["companies"])
 
@@ -119,3 +120,33 @@ def delete_company(ticker: str, db: Session = Depends(get_db)):
     db.delete(company)
     db.commit()
     return {"deleted": ticker.upper()}
+
+# ── SEC test endpoint ─────────────────────────────────────
+@router.get("/{ticker}/sec-test")
+async def test_sec(ticker: str):
+    """
+    Quick test: verify SEC EDGAR can find this company
+    and list its recent filings — without downloading full text
+    """
+    cik = await get_cik(ticker)
+    if not cik:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No SEC CIK found for {ticker}"
+        )
+
+    filings_10k = await get_recent_filings(cik, "10-K", count=3)
+    filings_10q = await get_recent_filings(cik, "10-Q", count=4)
+
+    return {
+        "ticker": ticker.upper(),
+        "cik": cik,
+        "recent_10K": [
+            {"date": f["date"], "doc": f["primary_doc"]}
+            for f in filings_10k
+        ],
+        "recent_10Q": [
+            {"date": f["date"], "doc": f["primary_doc"]}
+            for f in filings_10q
+        ],
+    }
