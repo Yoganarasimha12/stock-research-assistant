@@ -2,7 +2,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import create_tables, test_connection
 from models import Company, Document, DocumentChunk, Question
-from routers import companies
+from routers import companies, documents 
+  
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s"
+)       
 
 app = FastAPI(
     title="Stock Research Assistant",
@@ -17,8 +23,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Register routers
 app.include_router(companies.router)
+app.include_router(documents.router)            
 
 @app.on_event("startup")
 def startup():
