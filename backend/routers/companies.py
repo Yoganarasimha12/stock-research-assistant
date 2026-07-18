@@ -150,3 +150,72 @@ async def test_sec(ticker: str):
             for f in filings_10q
         ],
     }
+   
+# ── Stock price history ─────────────────────────────────── 
+@router.get("/{ticker}/prices")
+def get_stock_prices(ticker: str, period: str = "1y"):
+    """
+    Get historical stock prices.
+    period options: 1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y
+    """
+    try:
+        data = yf.Ticker(ticker.upper()).history(period=period)
+
+        if data.empty:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No price data found for {ticker}"
+            )
+
+        data = data.reset_index()
+        prices = [
+            {
+                "date": row["Date"].strftime("%Y-%m-%d"),
+                "open": round(float(row["Open"]), 2),
+                "high": round(float(row["High"]), 2),
+                "low": round(float(row["Low"]), 2),
+                "close": round(float(row["Close"]), 2),
+                "volume": int(row["Volume"]),
+            }
+            for _, row in data.iterrows()
+        ]
+
+        return {
+            "ticker": ticker.upper(),
+            "period": period,
+            "total_days": len(prices),
+            "prices": prices
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Company market info ───────────────────────────────────
+@router.get("/{ticker}/info")
+def get_company_info(ticker: str):
+    """
+    Get real-time company stats: market cap, P/E ratio,
+    52-week high/low etc.
+    """
+    try:
+        info = yf.Ticker(ticker.upper()).info
+
+        return {
+            "ticker": ticker.upper(),
+            "name": info.get("longName"),
+            "sector": info.get("sector"),
+            "industry": info.get("industry"),
+            "market_cap": info.get("marketCap"),
+            "pe_ratio": info.get("trailingPE"),
+            "52_week_high": info.get("fiftyTwoWeekHigh"),
+            "52_week_low": info.get("fiftyTwoWeekLow"),
+            "current_price": info.get("currentPrice"),
+            "currency": info.get("currency"),
+            "exchange": info.get("exchange"),
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
