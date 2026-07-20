@@ -35,3 +35,6 @@ def startup():
 @app.get("/")
 def health_check():
     return {"status": "ok", "message": "Stock Research API is running"}
+
+
+## comments to test commits and contributions
