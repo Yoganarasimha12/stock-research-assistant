@@ -1,3 +1,6 @@
+import logging
+logger = logging.getLogger(__name__)
+
 import httpx
 import re
 from typing import Optional
@@ -160,16 +163,16 @@ async def fetch_company_filings(
     if not cik:
         raise ValueError(f"Could not find SEC CIK for ticker: {ticker}")
 
-    print(f"Found CIK for {ticker}: {cik}")
+    logger.info(f"Found CIK for {ticker}: {cik}")
     all_filings = []
 
     for filing_type in filing_types:
         count = 3 if filing_type == "10-K" else 4
         filings = await get_recent_filings(cik, filing_type, count=count)
-        print(f"Found {len(filings)} {filing_type} filings")
+        logger.info(f"Found {len(filings)} {filing_type} filings")
 
         for f in filings:
-            print(f"  Downloading {filing_type} from {f['date']}...")
+            logger.info(f"Downloading {filing_type} from {f['date']}...")
             text = await fetch_filing_text(
                 cik, f["accession"], f["primary_doc"], filing_type
             )

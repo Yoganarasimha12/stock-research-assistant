@@ -1,3 +1,6 @@
+import logging
+logger = logging.getLogger(__name__)
+
 import httpx
 import os
 from datetime import datetime, timedelta
@@ -9,7 +12,7 @@ load_dotenv()
 async def fetch_news(
     company_name: str,
     ticker: str,
-    days_back: int = 60
+    days_back: int = 25   # ← free tier safe
 ) -> list:
     """
     Fetch recent news articles about a company.
@@ -19,7 +22,7 @@ async def fetch_news(
 
     # If no API key configured, skip news gracefully
     if not api_key:
-        print("⚠️  NEWS_API_KEY not set — skipping news fetch")
+        logger.warning("NEWS_API_KEY not set — skipping news fetch")
         return []
 
     from_date = (datetime.utcnow() - timedelta(days=days_back)).strftime("%Y-%m-%d")
@@ -41,7 +44,7 @@ async def fetch_news(
             )
             data = r.json()
     except Exception as e:
-        print(f"⚠️  News fetch failed: {e}")
+        logger.warning(f"News fetch failed: {e}")
         return []
 
     articles = data.get("articles", [])
@@ -70,5 +73,5 @@ async def fetch_news(
             "source_url": a.get("url", ""),
         })
 
-    print(f"✅ Fetched {len(results)} news articles for {company_name}")
+    logger.info(f"Fetched {len(results)} news articles for {company_name}")
     return results

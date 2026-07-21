@@ -1,3 +1,6 @@
+import logging
+logger = logging.getLogger(__name__)
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -18,14 +21,13 @@ class CompanyCreate(BaseModel):
 # ── CREATE a company ──────────────────────────────────────
 @router.post("/")
 def create_company(data: CompanyCreate, db: Session = Depends(get_db)):
-    # Check if already exists — don't create duplicates
     existing = db.query(Company).filter(
         Company.ticker == data.ticker.upper()
     ).first()
     if existing:
+        logger.info(f"Company {data.ticker} already exists, returning existing")
         return existing
 
-    # Fetch real name + sector from yfinance if name not provided
     name = data.name
     sector = None
     if not name:
@@ -33,7 +35,9 @@ def create_company(data: CompanyCreate, db: Session = Depends(get_db)):
             info = yf.Ticker(data.ticker).info
             name = info.get("longName", data.ticker)
             sector = info.get("sector")
-        except:
+            logger.info(f"Fetched info for {data.ticker}: {name}")
+        except Exception as e:
+            logger.warning(f"yfinance failed for {data.ticker}: {e}")
             name = data.ticker
 
     company = Company(
@@ -44,6 +48,7 @@ def create_company(data: CompanyCreate, db: Session = Depends(get_db)):
     db.add(company)
     db.commit()
     db.refresh(company)
+    logger.info(f"Created company: {company.ticker}")
     return company
 
 
