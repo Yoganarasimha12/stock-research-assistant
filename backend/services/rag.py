@@ -47,7 +47,7 @@ def generate_answer(query: str, chunks: list[dict]) -> dict:
 
     try:
         response = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="llama-3.1-8b-instant",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_message},
@@ -84,3 +84,29 @@ def generate_answer(query: str, chunks: list[dict]) -> dict:
             "sources": [],
             "model": None,
         }
+        
+def refine_query(question: str, company_name: str) -> str:
+    """
+    Rewrite a vague question into a more specific one
+    better suited for financial document search.
+    """
+    try:
+        response = groq_client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Rewrite this question about {company_name} to be more specific "
+                    f"for searching financial documents like SEC filings and earnings reports. "
+                    f"Return only the rewritten question, nothing else:\n\n{question}"
+                )
+            }],
+            temperature=0,
+            max_tokens=100,
+        )
+        refined = response.choices[0].message.content.strip()
+        logger.info(f"Refined query: '{question}' → '{refined}'")
+        return refined
+    except Exception as e:
+        logger.warning(f"Query refinement failed: {e}")
+        return question  # fall back to original

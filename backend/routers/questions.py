@@ -344,3 +344,44 @@ async def websocket_qa(
             await websocket.send_json({"type": "error", "message": str(e)})
         except:
             pass
+        
+@router.get("/{ticker}/ask/preview")
+def preview_retrieval(
+    ticker: str,
+    q: str,
+    doc_type: str = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Preview what chunks will be retrieved before asking.
+    Useful for understanding why an answer is good or bad.
+    Shows similarity scores so you can tune the threshold.
+    """
+    company = db.query(Company).filter(
+        Company.ticker == ticker.upper()
+    ).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    chunks = retrieve(
+        query=q,
+        company_id=company.id,
+        doc_type_filter=doc_type
+    )
+
+    return {
+        "query": q,
+        "chunks_found": len(chunks),
+        "quality": "good" if chunks and chunks[0]["similarity"] > 0.6 else
+                   "okay" if chunks and chunks[0]["similarity"] > 0.45 else "weak",
+        "chunks": [
+            {
+                "rank": c["rank"],
+                "similarity": c["similarity"],
+                "doc_type": c["doc_type"],
+                "date": str(c["filing_date"])[:10],
+                "text_preview": c["text"][:200],
+            }
+            for c in chunks
+        ]
+    }
