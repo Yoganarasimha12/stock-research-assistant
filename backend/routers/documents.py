@@ -9,6 +9,7 @@ from services.news_fetcher import fetch_news
 from services.chunker import chunk_document
 from services.embedder import embed_and_store
 from services.embedder import get_collection_stats
+from services.retriever import retrieve as retrieve_chunks
 
 router = APIRouter(prefix="/companies", tags=["ingestion"])
 logger = logging.getLogger(__name__)
@@ -214,3 +215,45 @@ def get_status(ticker: str, db: Session = Depends(get_db)):
 def chroma_stats():
     """How many chunks are stored in the vector database"""
     return get_collection_stats()
+
+@router.get("/{ticker}/retrieve")
+def test_retrieve(
+    ticker: str,
+    q: str,
+    doc_type: str = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Test retrieval — see what chunks come back for a query.
+    Use this to verify RAG quality before adding generation.
+    """
+    company = db.query(Company).filter(
+        Company.ticker == ticker.upper()
+    ).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    chunks = retrieve_chunks(
+        query=q,
+        company_id=company.id,
+        doc_type_filter=doc_type
+    )
+
+    return {
+        "query": q,
+        "company": ticker.upper(),
+        "doc_type_filter": doc_type,
+        "total_retrieved": len(chunks),
+        "chunks": [
+            {
+                "rank": c["rank"],
+                "similarity": c["similarity"],
+                "final_score": c["final_score"],
+                "doc_type": c["doc_type"],
+                "date": str(c["filing_date"])[:10],
+                "text_preview": c["text"][:300],
+                "source_url": c["source_url"],
+            }
+            for c in chunks
+        ]
+    }
