@@ -10,6 +10,8 @@ from services.rag import generate_answer
 import json
 from fastapi.responses import StreamingResponse
 from services.rag import build_context, SYSTEM_PROMPT, groq_client
+from fastapi import WebSocket, WebSocketDisconnect
+
 
 router = APIRouter(prefix="/companies", tags=["questions"])
 logger = logging.getLogger(__name__)
@@ -203,3 +205,142 @@ async def ask_stream(
             "X-Accel-Buffering": "no",
         }
     )
+    
+@router.websocket("/{ticker}/ws")
+async def websocket_qa(
+    websocket: WebSocket,
+    ticker: str,
+    db: Session = Depends(get_db)
+):
+    """
+    WebSocket endpoint for multi-turn conversation.
+    Keeps conversation history so follow-up questions work.
+    User sends: {"question": "...", "doc_type": "10-K"}
+    Server sends: {"type": "sources", "sources": [...]}
+                  {"type": "token", "token": "..."}
+                  {"type": "done"}
+    """
+    await websocket.accept()
+
+    company = db.query(Company).filter(
+        Company.ticker == ticker.upper()
+    ).first()
+
+    if not company:
+        await websocket.send_json({"type": "error", "message": "Company not found"})
+        await websocket.close()
+        return
+
+    if company.ingestion_status != "done":
+        await websocket.send_json({
+            "type": "error",
+            "message": f"Ingestion not complete. Status: {company.ingestion_status}"
+        })
+        await websocket.close()
+        return
+
+    # Conversation history — persists for the entire WebSocket session
+    conversation_history = []
+    logger.info(f"WebSocket connected for {ticker}")
+
+    try:
+        while True:
+            # Wait for a question from the client
+            data = await websocket.receive_json()
+            question = data.get("question", "").strip()
+            doc_type = data.get("doc_type")
+
+            if not question:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Empty question received"
+                })
+                continue
+
+            logger.info(f"WS question for {ticker}: '{question[:50]}'")
+
+            # Retrieve relevant chunks
+            chunks = retrieve(
+                query=question,
+                company_id=company.id,
+                doc_type_filter=doc_type
+            )
+
+            # Send sources first
+            sources = [
+                {
+                    "rank": c["rank"],
+                    "doc_type": c["doc_type"],
+                    "date": str(c["filing_date"])[:10],
+                    "url": c["source_url"],
+                    "chunk_text": c["text"][:400],
+                    "similarity": c["similarity"],
+                }
+                for c in chunks
+            ]
+            await websocket.send_json({"type": "sources", "sources": sources})
+
+            # Build messages with conversation history for multi-turn
+            context = build_context(chunks)
+            messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+
+            # Include last 3 Q&A pairs (6 messages) for context
+            messages.extend(conversation_history[-6:])
+
+            # Add current question with retrieved context
+            messages.append({
+                "role": "user",
+                "content": f"Source documents:\n\n{context}\n\n---\n\nQuestion: {question}"
+            })
+
+            # Stream response tokens
+            stream = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=messages,
+                temperature=0.1,
+                max_tokens=1000,
+                stream=True,
+            )
+
+            full_answer = ""
+            for chunk in stream:
+                token = chunk.choices[0].delta.content
+                if token:
+                    full_answer += token
+                    await websocket.send_json({
+                        "type": "token",
+                        "token": token
+                    })
+
+            # Signal done
+            await websocket.send_json({"type": "done"})
+
+            # Update conversation history
+            conversation_history.append({
+                "role": "user",
+                "content": question
+            })
+            conversation_history.append({
+                "role": "assistant",
+                "content": full_answer
+            })
+
+            # Save to DB
+            q = Question(
+                company_id=company.id,
+                question=question,
+                answer=full_answer,
+                sources=sources,
+                doc_type_filter=doc_type,
+            )
+            db.add(q)
+            db.commit()
+
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket disconnected for {ticker}")
+    except Exception as e:
+        logger.error(f"WebSocket error for {ticker}: {e}")
+        try:
+            await websocket.send_json({"type": "error", "message": str(e)})
+        except:
+            pass
