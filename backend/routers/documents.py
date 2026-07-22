@@ -6,6 +6,9 @@ from database import get_db
 from models import Company, Document
 from services.sec_fetcher import fetch_company_filings
 from services.news_fetcher import fetch_news
+from services.chunker import chunk_document
+from services.embedder import embed_and_store
+from services.embedder import get_collection_stats
 
 router = APIRouter(prefix="/companies", tags=["ingestion"])
 logger = logging.getLogger(__name__)
@@ -13,10 +16,6 @@ logger = logging.getLogger(__name__)
 
 # ── Background task: does the actual heavy work ───────────
 async def run_ingestion(company_id: int, ticker: str, db: Session):
-    """
-    Runs after API responds — fetches all docs and saves to DB.
-    Updates ingestion_status so frontend can poll progress.
-    """
     company = db.query(Company).filter(Company.id == company_id).first()
 
     try:
@@ -28,26 +27,23 @@ async def run_ingestion(company_id: int, ticker: str, db: Session):
         all_docs.extend(filings)
         logger.info(f"Got {len(filings)} SEC filings")
 
-        # 2. Fetch news articles
+        # 2. Fetch news
         logger.info(f"Fetching news for {ticker}...")
         news = await fetch_news(company.name, ticker)
         all_docs.extend(news)
         logger.info(f"Got {len(news)} news articles")
 
-        # 3. Save all to PostgreSQL
-        saved = 0
+        # 3. Save raw documents to PostgreSQL
+        saved_docs = []
         skipped = 0
         for doc_data in all_docs:
-            # Skip if already ingested (check by source_url)
             exists = db.query(Document).filter(
                 Document.company_id == company_id,
                 Document.source_url == doc_data["source_url"]
             ).first()
-
             if exists:
                 skipped += 1
                 continue
-
             doc = Document(
                 company_id=company_id,
                 doc_type=doc_data["doc_type"],
@@ -57,21 +53,30 @@ async def run_ingestion(company_id: int, ticker: str, db: Session):
                 filing_date=doc_data["filing_date"],
             )
             db.add(doc)
-            saved += 1
+            db.flush()        # get doc.id without full commit
+            saved_docs.append(doc)
 
         db.commit()
-        logger.info(f"Saved {saved} docs, skipped {skipped} duplicates")
+        logger.info(f"Saved {len(saved_docs)} docs, skipped {skipped} duplicates")
 
-        # 4. Mark ingestion complete
+        # 4. Chunk + embed each document
+        total_chunks = 0
+        for doc in saved_docs:
+            chunks = chunk_document(doc)
+            count = embed_and_store(chunks, db)
+            total_chunks += count
+            logger.info(f"Embedded {count} chunks from {doc.doc_type}: {doc.title}")
+
+        # 5. Mark done
         company.ingestion_status = "done"
         db.commit()
-        logger.info(f"✅ Ingestion complete for {ticker}")
+        logger.info(f"✅ Ingestion complete for {ticker}: {len(saved_docs)} docs, {total_chunks} chunks")
 
     except Exception as e:
-        # Mark as failed so frontend knows something went wrong
         company.ingestion_status = "failed"
         db.commit()
         logger.error(f"❌ Ingestion failed for {ticker}: {e}")
+        raise
 
 
 # ── Trigger ingestion endpoint ────────────────────────────
@@ -203,3 +208,9 @@ def get_status(ticker: str, db: Session = Depends(get_db)):
         "status": company.ingestion_status,
         "documents_saved": doc_count,
     }
+    
+ # ── Chroma stats endpoint ──────────────────────────────────
+@router.get("/chroma/stats")
+def chroma_stats():
+    """How many chunks are stored in the vector database"""
+    return get_collection_stats()

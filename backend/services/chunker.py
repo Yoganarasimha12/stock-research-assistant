@@ -63,14 +63,12 @@ def chunk_by_sentences(text: str, max_words: int = 400) -> list[str]:
     return [c for c in chunks if len(c.split()) >= 30]
 
 
-def chunk_by_sections(text: str, max_words: int = 500) -> list[str]:
+def chunk_by_sections(text: str, max_words: int = 400) -> list[str]:
     """
     Split SEC filings on ITEM headers first, then sub-chunk large sections.
-    Best for: 10-K, 10-Q filings which have consistent section structure
+    Reduced max_words to 400 to keep chunks focused.
     """
-    # SEC filing section headers
     section_pattern = r'((?:ITEM|Item)\s+\d+[A-Za-z]?\.?\s+[A-Z][A-Z\s]+)'
-
     parts = re.split(section_pattern, text)
     chunks = []
     current_header = ""
@@ -79,23 +77,19 @@ def chunk_by_sections(text: str, max_words: int = 500) -> list[str]:
         part = part.strip()
         if not part:
             continue
-
-        # Check if this part is a section header
         if re.match(section_pattern, part):
             current_header = part
             continue
 
-        # Combine header with content
         full_section = f"{current_header}\n{part}".strip() if current_header else part
 
-        # Sub-chunk large sections
+        # Always sub-chunk — don't let any chunk exceed max_words
         if len(full_section.split()) > max_words:
             sub_chunks = chunk_by_sentences(full_section, max_words)
             chunks.extend(sub_chunks)
         elif len(full_section.split()) >= 30:
             chunks.append(full_section)
 
-    # If section splitting found nothing, fall back to sentence chunking
     if not chunks:
         logger.warning("Section chunking found no sections, falling back to sentence chunking")
         chunks = chunk_by_sentences(text, max_words)
@@ -103,21 +97,41 @@ def chunk_by_sections(text: str, max_words: int = 500) -> list[str]:
     return chunks
 
 
+def enforce_max_size(chunks: list[str], max_words: int = 400) -> list[str]:
+    """
+    Final safety pass — breaks any chunk still over max_words.
+    Runs after any chunking strategy to guarantee size limits.
+    """
+    result = []
+    for chunk in chunks:
+        if len(chunk.split()) <= max_words:
+            result.append(chunk)
+        else:
+            # Break oversized chunk into fixed-size pieces
+            words = chunk.split()
+            for i in range(0, len(words), max_words - 50):
+                piece = " ".join(words[i:i + max_words])
+                if len(piece.split()) >= 30:
+                    result.append(piece)
+    return result
+
+
 def chunk_document(doc) -> list[Chunk]:
     """
-    Main entry point — picks the right chunking strategy
-    based on document type.
+    Main entry point — picks chunking strategy then enforces size limits.
     """
     if not doc.raw_text:
         logger.warning(f"Document {doc.id} has no text, skipping")
         return []
 
-    # Pick strategy based on doc type
+    # Pick strategy
     if doc.doc_type in ("10-K", "10-Q"):
         text_chunks = chunk_by_sections(doc.raw_text)
     else:
-        # News articles, earnings transcripts
         text_chunks = chunk_by_sentences(doc.raw_text)
+
+    # ALWAYS enforce max size after any strategy
+    text_chunks = enforce_max_size(text_chunks, max_words=400)
 
     chunks = [
         Chunk(
@@ -135,6 +149,8 @@ def chunk_document(doc) -> list[Chunk]:
 
     logger.info(
         f"Chunked doc {doc.id} ({doc.doc_type}) into "
-        f"{len(chunks)} chunks, avg {sum(c.word_count for c in chunks) // max(len(chunks),1)} words"
+        f"{len(chunks)} chunks, avg "
+        f"{sum(c.word_count for c in chunks) // max(len(chunks), 1)} words, "
+        f"max {max(c.word_count for c in chunks)} words"
     )
     return chunks
