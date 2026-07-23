@@ -3,7 +3,7 @@ import yfinance as yf
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
 from sqlalchemy.orm import Session
 from database import get_db
-from models import Company, Document
+from models import Company, Document, DocumentChunk
 from services.sec_fetcher import fetch_company_filings
 from services.news_fetcher import fetch_news
 from services.chunker import chunk_document
@@ -121,13 +121,26 @@ async def ingest_company(
             "message": "Ingestion already in progress. Poll GET /companies/{ticker} for status."
         }
 
-    # Force re-ingest: clear existing documents
+    # Force re-ingest: clear existing documents AND chunks
     if force:
-        deleted = db.query(Document).filter(
+        # Get all document ids for this company
+        doc_ids = [d.id for d in db.query(Document).filter(
             Document.company_id == company.id
-        ).delete()
+        ).all()]
+
+        # Delete chunks first (foreign key dependency)
+        if doc_ids:
+            db.query(DocumentChunk).filter(
+                DocumentChunk.doc_id.in_(doc_ids)
+            ).delete(synchronize_session=False)
+
+        # Then delete documents
+        db.query(Document).filter(
+            Document.company_id == company.id
+        ).delete(synchronize_session=False)
+
         db.commit()
-        logger.info(f"Force re-ingest: deleted {deleted} existing docs for {ticker}")
+        logger.info(f"Force re-ingest: cleared docs and chunks for {ticker}")
 
     # Set status to running
     company.ingestion_status = "running"
