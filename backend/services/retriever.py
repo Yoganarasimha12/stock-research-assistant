@@ -37,9 +37,15 @@ def retrieve(
     query_embedding = get_embedding(query)
 
     # Build metadata filter — CRITICAL: always filter by company
-    where = {"company_id": company_id}
     if doc_type_filter and doc_type_filter != "all":
-        where["doc_type"] = doc_type_filter
+        where = {
+            "$and": [
+                {"company_id": {"$eq": company_id}},
+                {"doc_type": {"$eq": doc_type_filter}}
+            ]
+        }
+    else:
+        where = {"company_id": {"$eq": company_id}}
 
     # Fetch more than needed so we can re-rank and deduplicate
     fetch_n = min(n_results * 3, collection.count())

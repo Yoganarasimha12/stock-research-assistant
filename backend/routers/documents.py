@@ -257,3 +257,18 @@ def test_retrieve(
             for c in chunks
         ]
     }
+    
+#temporary endpoint to clear all documents for a company (for testing)
+@router.get("/chroma/debug")
+def chroma_debug():
+    """Check what metadata is actually stored in Chroma"""
+    from services.embedder import get_chroma_collection
+    collection = get_chroma_collection()
+
+    # Get first 5 chunks and show their metadata
+    results = collection.get(limit=5, include=["metadatas"])
+
+    return {
+        "total_chunks": collection.count(),
+        "sample_metadatas": results["metadatas"]
+    }
